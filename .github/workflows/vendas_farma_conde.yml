@@ -1,0 +1,38 @@
+name: Vendas Farma Conde – Circularização (D-1)
+
+on:
+  # Execução automática diária
+  schedule:
+    # 08:00 UTC = 05:00 BRT
+    - cron: '0 8 * * *'
+
+  # Permite rodar manualmente
+  workflow_dispatch:
+
+jobs:
+  executar:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout do repositório
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      # 2️⃣ Setup do Python
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 3️⃣ Instalar dependências
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      # 4️⃣ Executar script
+      - name: Executar vendas Farma Conde
+        env:
+          VTEX_APP_KEY: ${{ secrets.VTEX_APP_KEY }}
+          VTEX_APP_TOKEN: ${{ secrets.VTEX_APP_TOKEN }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: python src/vendas_farma_conde.py
