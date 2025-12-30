@@ -2,7 +2,6 @@ import os
 print("Rodando em:", os.getcwd())
 
 import re
-import ssl
 import smtplib
 import logging
 import traceback
@@ -94,6 +93,18 @@ def vtex_headers():
     }
 
 
+def limpar_emails(lista):
+    emails_limpos = []
+    for e in lista or []:
+        if not e:
+            continue
+        e_str = str(e).strip()
+        if not e_str or e_str.lower() == "nan":
+            continue
+        emails_limpos.append(e_str)
+    return emails_limpos
+
+
 @lru_cache(maxsize=10000)
 def formatar_data_curta(iso_str):
     if not iso_str:
@@ -124,12 +135,21 @@ def janela_ontem_utc():
 
 def carregar_sellers():
     df = pd.read_excel(CONFIG_SELLERS_FILE)
-    return [{
-        "id": str(r["sellerId"]).strip(),
-        "display": str(r["sellerName"]).strip(),
-        "emailTo": [e.strip() for e in str(r.get("emailTo","")).split(";") if e.strip()],
-        "emailCc": [e.strip() for e in str(r.get("emailCc","")).split(";") if e.strip()],
-    } for _, r in df.iterrows() if str(r.get("ativo","")).lower() == "sim"]
+    sellers = []
+
+    for _, r in df.iterrows():
+        if str(r.get("ativo", "")).strip().lower() != "sim":
+            continue
+
+        sellers.append({
+            "id": str(r["sellerId"]).strip(),
+            "display": str(r["sellerName"]).strip(),
+            "emailTo": limpar_emails(str(r.get("emailTo", "")).split(";")),
+            "emailCc": limpar_emails(str(r.get("emailCc", "")).split(";")),
+        })
+
+    log(f"📌 Sellers ativos: {[s['display'] for s in sellers]}")
+    return sellers
 
 
 # =========================================================
@@ -187,7 +207,7 @@ def detalhe(order_id):
 # =========================================================
 
 def get_total(totals, code):
-    return next((t.get("value",0)/100 for t in totals if t.get("id")==code), 0.0)
+    return next((t.get("value", 0) / 100 for t in totals if t.get("id") == code), 0.0)
 
 
 def gerar_linhas(order, seller):
@@ -195,19 +215,19 @@ def gerar_linhas(order, seller):
         return []
 
     totals = order.get("totals", [])
-    itens = get_total(totals,"Items")
-    frete = get_total(totals,"Shipping")
+    itens = get_total(totals, "Items")
+    frete = get_total(totals, "Shipping")
 
     linhas = []
-    for tx in order.get("paymentData",{}).get("transactions",[]):
-        for p in tx.get("payments",[]):
+    for tx in order.get("paymentData", {}).get("transactions", []):
+        for p in tx.get("payments", []):
             linhas.append({
                 "Faturado em": formatar_data_curta(order.get("invoicedDate")),
                 "Pedido": order.get("orderId"),
                 "Seller": seller["display"],
                 "Total_itens": itens,
                 "Frete": frete,
-                "Valor_total": itens+frete,
+                "Valor_total": itens + frete,
                 "Parcelas": p.get("installments")
             })
     return linhas
@@ -221,18 +241,20 @@ def circularizar(path, sufixo):
     df = pd.read_excel(path).drop_duplicates()
     df["Faturado em"] = pd.to_datetime(df["Faturado em"], dayfirst=True)
 
-    for i in range(1,13):
+    for i in range(1, 13):
         df[f"Parcela {i}"] = None
 
-    for i,r in df.iterrows():
-        if not r["Parcelas"]: continue
-        for p in range(int(min(r["Parcelas"],12))):
-            d = (r["Faturado em"] + pd.DateOffset(months=p+1)).replace(day=15)
-            if d.weekday()>=5: d+=BDay(1)
-            df.at[i,f"Parcela {p+1}"] = d.strftime("%d/%m/%Y")
+    for i, r in df.iterrows():
+        if not r["Parcelas"]:
+            continue
+        for p in range(int(min(r["Parcelas"], 12))):
+            d = (r["Faturado em"] + pd.DateOffset(months=p + 1)).replace(day=15)
+            if d.weekday() >= 5:
+                d += BDay(1)
+            df.at[i, f"Parcela {p + 1}"] = d.strftime("%d/%m/%Y")
 
-    out = os.path.join(CIRC_OUTPUT_DIR,f"Farma-Conde_{sufixo}.xlsx")
-    df.to_excel(out,index=False)
+    out = os.path.join(CIRC_OUTPUT_DIR, f"Farma-Conde_{sufixo}.xlsx")
+    df.to_excel(out, index=False)
     return out
 
 
@@ -241,24 +263,37 @@ def circularizar(path, sufixo):
 # =========================================================
 
 def enviar_email(path, seller, data_brt):
+    to_list = limpar_emails(seller["emailTo"])
+    cc_list = limpar_emails(seller["emailCc"])
+
+    if not to_list:
+        log("⚠ Nenhum emailTo válido encontrado. Envio cancelado.")
+        return
+
     msg = MIMEMultipart()
     msg["From"] = EMAIL_FROM
-    msg["To"] = ", ".join(seller["emailTo"])
-    msg["Cc"] = ", ".join(seller["emailCc"])
+    msg["To"] = ", ".join(to_list)
+    if cc_list:
+        msg["Cc"] = ", ".join(cc_list)
+
     msg["Subject"] = f"Farma Conde – Circularização – {data_brt}"
+    msg.attach(MIMEText("Segue relatório de circularização.", "plain"))
 
-    msg.attach(MIMEText("Segue relatório de circularização.","plain"))
-
-    with open(path,"rb") as f:
-        part = MIMEBase("application","octet-stream")
+    with open(path, "rb") as f:
+        part = MIMEBase("application", "octet-stream")
         part.set_payload(f.read())
         encoders.encode_base64(part)
-        part.add_header("Content-Disposition",f'attachment; filename="{os.path.basename(path)}"')
+        part.add_header(
+            "Content-Disposition",
+            f'attachment; filename="{os.path.basename(path)}"'
+        )
         msg.attach(part)
 
-    with smtplib.SMTP_SSL(SMTP_SERVER,SMTP_PORT) as s:
-        s.login(SMTP_USER,SMTP_PASSWORD)
-        s.sendmail(EMAIL_FROM, seller["emailTo"]+seller["emailCc"], msg.as_string())
+    with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as s:
+        s.login(SMTP_USER, SMTP_PASSWORD)
+        s.sendmail(EMAIL_FROM, to_list + cc_list, msg.as_string())
+
+    log(f"📧 Email enviado para: {to_list + cc_list}")
 
 
 # =========================================================
@@ -266,29 +301,42 @@ def enviar_email(path, seller, data_brt):
 # =========================================================
 
 def main():
-    start_utc,end_utc,data_iso,data_brt,suf = janela_ontem_utc()
-    seller = carregar_sellers()[0]
+    try:
+        start_utc, end_utc, data_iso, data_brt, sufixo = janela_ontem_utc()
+        sellers = carregar_sellers()
 
-    resumo = listar_resumo(start_utc,end_utc,seller["display"])
-    detalhes = {}
+        sellers_farma = [s for s in sellers if s["id"].lower() == "farmaconde"]
+        if not sellers_farma:
+            log("⚠ Nenhum seller Farma Conde encontrado.")
+            return
 
-    with ThreadPoolExecutor(DEFAULT_MAX_WORKERS) as ex:
-        fut = {ex.submit(detalhe,o["orderId"]):o["orderId"] for o in resumo}
-        for f in as_completed(fut):
-            if f.result(): detalhes[fut[f]]=f.result()
+        seller = sellers_farma[0]
 
-    linhas=[]
-    for o in resumo:
-        if o["orderId"] in detalhes:
-            linhas.extend(gerar_linhas(detalhes[o["orderId"]],seller))
+        resumo = listar_resumo(start_utc, end_utc, seller["display"])
+        detalhes = {}
 
-    bruto = os.path.join(BASE_OUTPUT_DIR,f"vendas_{data_iso}.xlsx")
-    pd.DataFrame(linhas).drop_duplicates().to_excel(bruto,index=False)
+        with ThreadPoolExecutor(DEFAULT_MAX_WORKERS) as ex:
+            fut = {ex.submit(detalhe, o["orderId"]): o["orderId"] for o in resumo}
+            for f in as_completed(fut):
+                if f.result():
+                    detalhes[fut[f]] = f.result()
 
-    final = circularizar(bruto,suf)
-    enviar_email(final,seller,data_brt)
+        linhas = []
+        for o in resumo:
+            oid = o.get("orderId")
+            if oid in detalhes:
+                linhas.extend(gerar_linhas(detalhes[oid], seller))
 
-    log("✅ Processo finalizado")
+        bruto = os.path.join(BASE_OUTPUT_DIR, f"vendas_{data_iso}.xlsx")
+        pd.DataFrame(linhas).drop_duplicates().to_excel(bruto, index=False)
+
+        final = circularizar(bruto, sufixo)
+        enviar_email(final, seller, data_brt)
+
+        log("✅ Processo finalizado com sucesso.")
+
+    except Exception:
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
