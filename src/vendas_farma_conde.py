@@ -280,4 +280,16 @@ def main():
     linhas=[]
     for o in resumo:
         if o["orderId"] in detalhes:
-            linhas.extend(gerar_linhas(detalhes[o["orderId"]],s_
+            linhas.extend(gerar_linhas(detalhes[o["orderId"]],seller))
+
+    bruto = os.path.join(BASE_OUTPUT_DIR,f"vendas_{data_iso}.xlsx")
+    pd.DataFrame(linhas).drop_duplicates().to_excel(bruto,index=False)
+
+    final = circularizar(bruto,suf)
+    enviar_email(final,seller,data_brt)
+
+    log("✅ Processo finalizado")
+
+
+if __name__ == "__main__":
+    main()
