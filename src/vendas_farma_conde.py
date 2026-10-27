@@ -28,7 +28,7 @@ BASE_URL = "https://senffnet.vtexcommercestable.com.br"
 VTEX_APP_KEY = os.getenv("VTEX_APP_KEY")
 VTEX_APP_TOKEN = os.getenv("VTEX_APP_TOKEN")
 
-SMTP_SERVER = "smtp.skymail.net.br"
+SMTP_SERVER = "smtppro.zoho.com"
 SMTP_PORT = 465
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
